@@ -227,16 +227,12 @@ static void esp_zb_task(void *pvParameters)
         // FIXME: this is not the correct key, replace it with the proper one
         // 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
         // 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF
-        // Correct one as per
-        // https://x.com/hanno/status/667996639890681857
-        // the zigbee light link master key is 9F 55 95 F1 02 57 C8 A4 69 CB F4 2B C9 3F EE 31
-        //  9F 55 95 F1 02 57 C8 A4 69 CB F4 2B C9 3F EE 31
-        // 9F:55:95:F1:02:57:C8:A4:69:CB:F4:2B:C9:3F:EE:31
-        // 9F 55 95 F1 02 57 C8 A4 69 CB F4 2B C9 3F EE 31
-        0x9F, 0x55, 0x95, 0xF1, 0x02, 0x57, 0xC8, 0xA4,
-        0x69, 0xCB, 0xF4, 0x2B, 0xC9, 0x3F, 0xEE, 0x31};
-};
-esp_zb_secur_TC_standard_distributed_key_set(secret_zll_trust_center_key);
+        // ZLL Commissioning trust centre link key for Hue
+        // Source: https://peeveeone.com/2016/11/breakout-breakthrough/
+        // 81 42 86 86 5D C1 C8 B2 C8 CB C5 2E 5D 65 D1 B8
+        0x81, 0x42, 0x86, 0x86, 0x5D, 0xC1, 0xC8, 0xB2,
+        0xC8, 0xCB, 0xC5, 0x2E, 0x5D, 0x65, 0xD1, 0xB8};
+    esp_zb_secur_TC_standard_distributed_key_set(secret_zll_trust_center_key);
 
 esp_zb_color_dimmable_light_cfg_t light_cfg = ESP_ZB_DEFAULT_COLOR_DIMMABLE_LIGHT_CONFIG();
 esp_zb_ep_list_t *esp_zb_color_dimmable_light_ep = NULL;
