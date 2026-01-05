@@ -31,6 +31,90 @@ esptool.py --chip esp32c6 -b 460800 \
   write_flash "@flash_args"
 ```
 
+## Flashing with ESP-IDF
+
+If using ESP-IDF directly (e.g., ESP-IDF 6.0):
+
+### Environment Setup
+
+Before running any `idf.py` commands, activate the ESP-IDF environment:
+
+```bash
+source $HOME/esp/v6.0/esp-idf/export.sh
+```
+
+### Regular Flash (Preserves Zigbee Pairing)
+
+```bash
+idf.py -p /dev/cu.usbmodem1101 flash
+```
+
+Regular flashing only updates the application code and **preserves the NVS partition** where Zigbee network credentials are stored. Your device will automatically reconnect to the Hue bridge without needing to re-pair.
+
+### Full Factory Reset (Erases Zigbee Pairing)
+
+```bash
+idf.py -p /dev/cu.usbmodem1101 erase-flash
+```
+
+This erases **everything** including the Zigbee pairing data. Use this if:
+- The device is stuck in a loop
+- You need to pair with a different Hue bridge
+- You want to start completely fresh
+
+After `erase-flash`, you'll need to re-pair the device with your Hue bridge.
+
+### Build, Flash, and Monitor
+
+```bash
+idf.py -p /dev/cu.usbmodem1101 flash monitor
+```
+
+Note: Monitor requires a TTY. If running from a script, run monitor separately in another terminal:
+
+```bash
+idf.py -p /dev/cu.usbmodem1101 monitor
+```
+
+## Changing Device Type (RGB vs Color Temperature vs Extended Color)
+
+### Current Configuration
+This project is configured as a **Color Dimmable Light** (`ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID`) which supports:
+- RGB color control (XY color space)
+- Hue/Saturation
+- Brightness/Level
+
+### Other Device Types
+
+**Color Temperature Light** (`ESP_ZB_HA_COLOR_TEMPERATURE_LIGHT_DEVICE_ID`):
+- Warm/cold white control
+- No RGB colors
+- Adjustable color temperature (in mireds)
+
+**Extended Color Light** (`ESP_ZB_HA_EXTENDED_COLOR_LIGHT_DEVICE_ID`):
+- **Both** RGB color control AND color temperature
+- Supports all features of both types above
+- Best for full-featured lights
+
+### Switching Device Types
+
+**Important:** Changing the device type requires re-pairing with the Hue bridge.
+
+When you pair a Zigbee device, it announces its capabilities to the bridge. The bridge stores this information. If you change the device type, the bridge will have incorrect expectations.
+
+**Steps to change device type:**
+
+1. Delete the light from Hue app
+2. Update `main/esp_zb_light.c`:
+   - Change `ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID` to desired type
+   - Update the configuration struct (e.g., `esp_zb_color_temperature_light_cfg_t`)
+   - Add/remove appropriate clusters
+3. Build and flash the new firmware
+4. Run `idf.py -p /dev/cu.usbmodem1101 erase-flash` to clear old credentials
+5. Flash again and re-pair with Hue bridge
+
+The bridge will now recognize the device with its new capabilities.
+
 To clean up:
 
 ``` sh

@@ -1,4 +1,4 @@
-# Changes Made to Pair with Philips Hue
+# Changes Made to Pair with Philips Hue and Fix Colors
 
 ## 1. Fixed Syntax Error in `main/esp_zb_light.c`
 
@@ -35,7 +35,26 @@ However, Philips Hue uses **classical commissioning** (not touchlink), which req
 0xC8, 0xCB, 0xC5, 0x2E, 0x5D, 0x65, 0xD1, 0xB8
 ```
 
+## 3. Fixed RGB Color Order in `light_driver/src/light_driver.c`
+
+The ESP32-C6-DevKitC has a WS2812 LED variant that uses RGB color order instead of the standard GRB order. Red and green were swapped.
+
+**Changed in 5 locations (lines 37, 49, 59, 65, 73):**
+
+**Before (GRB order):**
+```c
+led_strip_set_pixel(s_led_strip, 0, s_green * ratio, s_red * ratio, s_blue * ratio)
+```
+
+**After (RGB order):**
+```c
+led_strip_set_pixel(s_led_strip, 0, s_red * ratio, s_green * ratio, s_blue * ratio)
+```
+
+This fix ensures red displays as red and green displays as green in the Hue app.
+
 ## References
 
 - [PeeVeeOne - Breakout Breakthrough](https://peeveeone.com/2016/11/breakout-breakthrough/) - Source of the correct ZLL Commissioning key
 - [PeeVeeOne - Connecting Mesh Bee to Philips Hue](https://peeveeone.com/2016/05/connecting-mesh-bee-to-philips-hue/) - Background on Hue Zigbee commissioning
+- [ESP32-C6-DevKitC-1 User Guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32c6/esp32-c6-devkitc-1/user_guide.html) - Hardware specifications
