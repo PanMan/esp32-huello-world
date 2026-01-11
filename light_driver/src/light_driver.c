@@ -51,48 +51,34 @@ static uint8_t clamp_u8(float value)
     return (uint8_t)(value);
 }
 
-static void color_temperature_to_rgb(uint16_t color_temperature_mireds, uint8_t *red, uint8_t *green, uint8_t *blue)
+static void color_temperature_to_wwa(uint16_t color_temperature_mireds, uint8_t *warm, uint8_t *cold, uint8_t *amber)
 {
     if (color_temperature_mireds == 0)
     {
         color_temperature_mireds = 1;
     }
     float kelvin = 1000000.0f / (float)color_temperature_mireds;
-    if (kelvin < 1000.0f)
+    if (kelvin < 2200.0f)
     {
-        kelvin = 1000.0f;
+        kelvin = 2200.0f;
     }
-    if (kelvin > 40000.0f)
+    if (kelvin > 6500.0f)
     {
-        kelvin = 40000.0f;
-    }
-
-    float temp = kelvin / 100.0f;
-    float r, g, b;
-
-    if (temp <= 66.0f)
-    {
-        r = 255.0f;
-        g = 99.4708025861f * logf(temp) - 161.1195681661f;
-        if (temp <= 19.0f)
-        {
-            b = 0.0f;
-        }
-        else
-        {
-            b = 138.5177312231f * logf(temp - 10.0f) - 305.0447927307f;
-        }
-    }
-    else
-    {
-        r = 329.698727446f * powf(temp - 60.0f, -0.1332047592f);
-        g = 288.1221695283f * powf(temp - 60.0f, -0.0755148492f);
-        b = 255.0f;
+        kelvin = 6500.0f;
     }
 
-    *red = clamp_u8(r);
-    *green = clamp_u8(g);
-    *blue = clamp_u8(b);
+    float t = (kelvin - 2200.0f) / (6500.0f - 2200.0f);
+    float warm_f = (1.0f - t) * 255.0f;
+    float cold_f = t * 255.0f;
+    float amber_f = 0.0f;
+    if (kelvin < 3000.0f)
+    {
+        amber_f = ((3000.0f - kelvin) / (3000.0f - 2200.0f)) * 255.0f;
+    }
+
+    *warm = clamp_u8(warm_f);
+    *cold = clamp_u8(cold_f);
+    *amber = clamp_u8(amber_f);
 }
 
 void light_driver_set_color_xy(uint16_t color_current_x, uint16_t color_current_y)
@@ -125,11 +111,11 @@ void light_driver_set_color_hue_sat(uint8_t hue, uint8_t sat)
 
 void light_driver_set_color_temperature(uint16_t color_temperature_mireds)
 {
-    uint8_t red = 0;
-    uint8_t green = 0;
-    uint8_t blue = 0;
-    color_temperature_to_rgb(color_temperature_mireds, &red, &green, &blue);
-    light_driver_set_color_RGB(red, green, blue);
+    uint8_t warm = 0;
+    uint8_t cold = 0;
+    uint8_t amber = 0;
+    color_temperature_to_wwa(color_temperature_mireds, &warm, &cold, &amber);
+    light_driver_set_color_RGB(warm, cold, amber);
 }
 
 void light_driver_set_color_RGB(uint8_t red, uint8_t green, uint8_t blue)
