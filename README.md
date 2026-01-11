@@ -115,6 +115,14 @@ When you pair a Zigbee device, it announces its capabilities to the bridge. The 
 
 The bridge will now recognize the device with its new capabilities.
 
+### Current Device Type: Color Temperature + Dimming
+
+This firmware currently identifies as a **Color Temperature Light** (`ESP_ZB_HA_COLOR_TEMPERATURE_LIGHT_DEVICE_ID`).
+It supports:
+- Warm/cold white control (mireds)
+- Dimming (level)
+No RGB color control is exposed to Hue.
+
 To clean up:
 
 ``` sh

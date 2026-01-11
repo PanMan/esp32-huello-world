@@ -19,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha/esp_zigbee_ha_standard.h"
+#include "zcl/esp_zigbee_zcl_color_control.h"
 
 #if !defined CONFIG_ZB_ZCZR
 #error Define ZB_ZCZR in idf.py menuconfig to compile light (Router) source code.
@@ -26,6 +27,11 @@
 
 static const char *TAG = "ESP_ZB_COLOR_DIMM_LIGHT";
 /********************* Define functions **************************/
+static uint16_t s_color_temperature = ESP_ZB_ZCL_COLOR_CONTROL_COLOR_TEMPERATURE_DEF_VALUE;
+static uint16_t s_color_temp_min = 153;  // ~6500K
+static uint16_t s_color_temp_max = 454;  // ~2200K
+static uint16_t s_color_temp_couple_level_min = 153; // keep CT in range when coupled to level
+static uint16_t s_startup_color_temp = 0xffff; // use previous
 static esp_err_t deferred_driver_init(void)
 {
     light_driver_init(LIGHT_DEFAULT_OFF);
@@ -132,12 +138,13 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
     uint8_t light_level = 0;
     uint16_t light_color_x = 0;
     uint16_t light_color_y = 0;
+    uint16_t light_color_temperature = 0;
     ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
     ESP_LOGI(TAG, "Received message: endpoint(%d), cluster(0x%x), attribute(0x%x), data size(%d)", message->info.dst_endpoint, message->info.cluster,
              message->attribute.id, message->attribute.data.size);
-    if (message->info.dst_endpoint == HA_COLOR_DIMMABLE_LIGHT_ENDPOINT)
+    if (message->info.dst_endpoint == HA_COLOR_TEMPERATURE_LIGHT_ENDPOINT)
     {
         switch (message->info.cluster)
         {
@@ -154,6 +161,14 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
             }
             break;
         case ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL:
+            if (message->attribute.id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID &&
+                message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16)
+            {
+                light_color_temperature = message->attribute.data.value ? *(uint16_t *)message->attribute.data.value : light_color_temperature;
+                ESP_LOGI(TAG, "Light color temperature changes to 0x%x mireds", light_color_temperature);
+                light_driver_set_color_temperature(light_color_temperature);
+                break;
+            }
             if (message->attribute.id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16)
             {
                 light_color_x = message->attribute.data.value ? *(uint16_t *)message->attribute.data.value : light_color_x;
@@ -161,6 +176,7 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
                                                                       ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID)
                                      ->data_p;
                 ESP_LOGI(TAG, "Light color x changes to 0x%x", light_color_x);
+                light_driver_set_color_xy(light_color_x, light_color_y);
             }
             else if (message->attribute.id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID &&
                      message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16)
@@ -170,12 +186,12 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
                                                                       ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID)
                                      ->data_p;
                 ESP_LOGI(TAG, "Light color y changes to 0x%x", light_color_y);
+                light_driver_set_color_xy(light_color_x, light_color_y);
             }
             else
             {
                 ESP_LOGW(TAG, "Color control cluster data: attribute(0x%x), type(0x%x)", message->attribute.id, message->attribute.data.type);
             }
-            light_driver_set_color_xy(light_color_x, light_color_y);
             break;
         case ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL:
             if (message->attribute.id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8)
@@ -235,35 +251,61 @@ static void esp_zb_task(void *pvParameters)
     esp_zb_secur_TC_standard_distributed_key_set(secret_zll_trust_center_key);
 
 esp_zb_color_dimmable_light_cfg_t light_cfg = ESP_ZB_DEFAULT_COLOR_DIMMABLE_LIGHT_CONFIG();
-esp_zb_ep_list_t *esp_zb_color_dimmable_light_ep = NULL;
-esp_zb_color_dimmable_light_ep = esp_zb_ep_list_create();
+light_cfg.color_cfg.color_capabilities = (1 << 4); // Color temperature only
+light_cfg.color_cfg.color_mode = 0x02;             // Color temperature mode
+light_cfg.color_cfg.enhanced_color_mode = 0x02;    // Enhanced color temperature mode
+esp_zb_ep_list_t *esp_zb_color_temperature_light_ep = NULL;
+esp_zb_color_temperature_light_ep = esp_zb_ep_list_create();
 esp_zb_endpoint_config_t endpoint_config = {
-    .endpoint = HA_COLOR_DIMMABLE_LIGHT_ENDPOINT,
+    .endpoint = HA_COLOR_TEMPERATURE_LIGHT_ENDPOINT,
     .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-    .app_device_id = ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID,
+    .app_device_id = ESP_ZB_HA_COLOR_TEMPERATURE_LIGHT_DEVICE_ID,
     .app_device_version = 1, // maybe important for Hue? Oh HELL yes.
 };
-esp_zb_ep_list_add_ep(esp_zb_color_dimmable_light_ep, esp_zb_color_dimmable_light_clusters_create(&light_cfg), endpoint_config);
+esp_zb_ep_list_add_ep(esp_zb_color_temperature_light_ep, esp_zb_color_dimmable_light_clusters_create(&light_cfg), endpoint_config);
 zcl_basic_manufacturer_info_t info = {
     .manufacturer_name = ESP_MANUFACTURER_NAME,
     .model_identifier = ESP_MODEL_IDENTIFIER,
 };
 
-esp_zcl_utility_add_ep_basic_manufacturer_info(esp_zb_color_dimmable_light_ep, HA_COLOR_DIMMABLE_LIGHT_ENDPOINT, &info);
+esp_zcl_utility_add_ep_basic_manufacturer_info(esp_zb_color_temperature_light_ep, HA_COLOR_TEMPERATURE_LIGHT_ENDPOINT, &info);
 
 // https://github.com/espressif/esp-zigbee-sdk/issues/457#issuecomment-2426128314
 uint16_t on_off_on_time = 0;
 bool on_off_global_scene_control = 0;
-esp_zb_cluster_list_t *cluster_list = esp_zb_ep_list_get_ep(esp_zb_color_dimmable_light_ep, HA_COLOR_DIMMABLE_LIGHT_ENDPOINT);
+esp_zb_cluster_list_t *cluster_list = esp_zb_ep_list_get_ep(esp_zb_color_temperature_light_ep, HA_COLOR_TEMPERATURE_LIGHT_ENDPOINT);
 esp_zb_attribute_list_t *onoff_attr_list =
     esp_zb_cluster_list_get_cluster(cluster_list, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
 
 esp_zb_on_off_cluster_add_attr(onoff_attr_list, ESP_ZB_ZCL_ATTR_ON_OFF_ON_TIME, &on_off_on_time);
 esp_zb_on_off_cluster_add_attr(onoff_attr_list, ESP_ZB_ZCL_ATTR_ON_OFF_GLOBAL_SCENE_CONTROL,
                                &on_off_global_scene_control);
+esp_zb_attribute_list_t *color_attr_list =
+    esp_zb_cluster_list_get_cluster(cluster_list, ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+if (esp_zb_color_control_cluster_add_attr(color_attr_list, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMPERATURE_ID, &s_color_temperature) != ESP_OK)
+{
+    ESP_LOGW(TAG, "Failed to add color temperature attribute");
+}
+if (esp_zb_color_control_cluster_add_attr(color_attr_list, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMP_PHYSICAL_MIN_MIREDS_ID, &s_color_temp_min) != ESP_OK)
+{
+    ESP_LOGW(TAG, "Failed to add color temperature min attribute");
+}
+if (esp_zb_color_control_cluster_add_attr(color_attr_list, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COLOR_TEMP_PHYSICAL_MAX_MIREDS_ID, &s_color_temp_max) != ESP_OK)
+{
+    ESP_LOGW(TAG, "Failed to add color temperature max attribute");
+}
+if (esp_zb_color_control_cluster_add_attr(color_attr_list, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_COUPLE_COLOR_TEMP_TO_LEVEL_MIN_MIREDS_ID,
+                                          &s_color_temp_couple_level_min) != ESP_OK)
+{
+    ESP_LOGW(TAG, "Failed to add color temperature couple-to-level attribute");
+}
+if (esp_zb_color_control_cluster_add_attr(color_attr_list, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_START_UP_COLOR_TEMPERATURE_MIREDS_ID, &s_startup_color_temp) != ESP_OK)
+{
+    ESP_LOGW(TAG, "Failed to add startup color temperature attribute");
+}
 // .
 
-esp_zb_device_register(esp_zb_color_dimmable_light_ep);
+esp_zb_device_register(esp_zb_color_temperature_light_ep);
 esp_zb_core_action_handler_register(zb_action_handler);
 esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
 ESP_ERROR_CHECK(esp_zb_start(false));

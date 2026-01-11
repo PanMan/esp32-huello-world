@@ -28,7 +28,10 @@ extern "C" {
 
 /* LED strip configuration */
 #define CONFIG_EXAMPLE_STRIP_LED_GPIO   8
-#define CONFIG_EXAMPLE_STRIP_LED_NUMBER 1
+// #define CONFIG_EXAMPLE_STRIP_LED_NUMBER 1
+
+  // #define CONFIG_EXAMPLE_STRIP_LED_GPIO   9
+  #define CONFIG_EXAMPLE_STRIP_LED_NUMBER 30
 
 
 /** Convert Hue,Saturation,V to RGB
@@ -119,6 +122,13 @@ void light_driver_set_color_xy(uint16_t color_current_x, uint16_t color_current_
 * @param  sat  The sat to be set
 */
 void light_driver_set_color_hue_sat(uint8_t hue, uint8_t sat);
+
+/**
+* @brief Set light color from color temperature (mireds)
+*
+* @param  color_temperature_mireds  The color temperature to be set (mireds)
+*/
+void light_driver_set_color_temperature(uint16_t color_temperature_mireds);
 
 #ifdef __cplusplus
 } // extern "C"
