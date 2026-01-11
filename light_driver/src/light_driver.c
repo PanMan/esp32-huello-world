@@ -22,6 +22,7 @@ static led_strip_handle_t s_led_strip;
 static uint8_t s_red = 255, s_green = 255, s_blue = 255, s_level = 255;
 static bool s_power = true;
 static esp_timer_handle_t s_refresh_timer;
+static void light_driver_apply(void);
 
 static void light_driver_refresh_cb(void *arg)
 {
@@ -106,7 +107,6 @@ void light_driver_set_color_xy(uint16_t color_current_x, uint16_t color_current_
     float color_Z = (1 - color_x - color_y) / color_y;
     /* change from xy to linear RGB NOT sRGB */
     XYZ_to_RGB(color_X, 1, color_Z, red_f, green_f, blue_f);
-    float ratio = (float)s_level / 255;
     s_red = (uint8_t)(red_f * (float)255);
     s_green = (uint8_t)(green_f * (float)255);
     s_blue = (uint8_t)(blue_f * (float)255);
@@ -117,7 +117,6 @@ void light_driver_set_color_hue_sat(uint8_t hue, uint8_t sat)
 {
     float red_f, green_f, blue_f;
     HSV_to_RGB(hue, sat, UINT8_MAX, red_f, green_f, blue_f);
-    float ratio = (float)s_level / 255;
     s_red = (uint8_t)red_f;
     s_green = (uint8_t)green_f;
     s_blue = (uint8_t)blue_f;
