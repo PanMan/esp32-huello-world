@@ -19,12 +19,21 @@
 
 static led_strip_handle_t s_led_strip;
 static uint8_t s_red = 255, s_green = 255, s_blue = 255, s_level = 255;
+static bool s_power = true;
 
-static void light_driver_set_all_pixels(uint8_t red, uint8_t green, uint8_t blue)
+static void light_driver_apply(void)
 {
+    int lit_count = s_power ? (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255 : 0;
     for (int i = 0; i < CONFIG_EXAMPLE_STRIP_LED_NUMBER; i++)
     {
-        ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, red, green, blue));
+        if (i < lit_count)
+        {
+            ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, s_red, s_green, s_blue));
+        }
+        else
+        {
+            ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, 0, 0, 0));
+        }
     }
     ESP_ERROR_CHECK(led_strip_refresh(s_led_strip));
 }
@@ -100,7 +109,7 @@ void light_driver_set_color_xy(uint16_t color_current_x, uint16_t color_current_
     s_red = (uint8_t)(red_f * (float)255);
     s_green = (uint8_t)(green_f * (float)255);
     s_blue = (uint8_t)(blue_f * (float)255);
-    light_driver_set_all_pixels(s_red * ratio, s_green * ratio, s_blue * ratio);
+    light_driver_apply();
 }
 
 void light_driver_set_color_hue_sat(uint8_t hue, uint8_t sat)
@@ -111,7 +120,7 @@ void light_driver_set_color_hue_sat(uint8_t hue, uint8_t sat)
     s_red = (uint8_t)red_f;
     s_green = (uint8_t)green_f;
     s_blue = (uint8_t)blue_f;
-    light_driver_set_all_pixels(s_red * ratio, s_green * ratio, s_blue * ratio);
+    light_driver_apply();
 }
 
 void light_driver_set_color_temperature(uint16_t color_temperature_mireds)
@@ -125,23 +134,22 @@ void light_driver_set_color_temperature(uint16_t color_temperature_mireds)
 
 void light_driver_set_color_RGB(uint8_t red, uint8_t green, uint8_t blue)
 {
-    float ratio = (float)s_level / 255;
     s_red = red;
     s_green = green;
     s_blue = blue;
-    light_driver_set_all_pixels(red * ratio, green * ratio, blue * ratio);
+    light_driver_apply();
 }
 
 void light_driver_set_power(bool power)
 {
-    light_driver_set_all_pixels(s_red * power, s_green * power, s_blue * power);
+    s_power = power;
+    light_driver_apply();
 }
 
 void light_driver_set_level(uint8_t level)
 {
     s_level = level;
-    float ratio = (float)s_level / 255;
-    light_driver_set_all_pixels(s_red * ratio, s_green * ratio, s_blue * ratio);
+    light_driver_apply();
 }
 
 void light_driver_init(bool power)
@@ -155,5 +163,6 @@ void light_driver_init(bool power)
     };
     ESP_ERROR_CHECK(led_strip_new_rmt_device(&led_strip_conf, &rmt_conf, &s_led_strip));
 
-    light_driver_set_power(power);
+    s_power = power;
+    light_driver_apply();
 }
