@@ -52,3 +52,4 @@
 #define BUTTON_LONG_PRESS_MS      600
 #define BUTTON_DIM_STEP           10
 #define BUTTON_DIM_INTERVAL_MS    200
+#define BUTTON_DEBOUNCE_MS        50

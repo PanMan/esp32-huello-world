@@ -14,18 +14,31 @@
 
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "led_strip.h"
 #include "light_driver.h"
 
 static led_strip_handle_t s_led_strip;
 static uint8_t s_red = 255, s_green = 255, s_blue = 255, s_level = 255;
 static bool s_power = true;
+static esp_timer_handle_t s_refresh_timer;
+
+static void light_driver_refresh_cb(void *arg)
+{
+    (void)arg;
+    // Re-apply the current buffer to mitigate occasional pixel glitches.
+    light_driver_apply();
+}
 
 static void light_driver_apply(void)
 {
     int lit_count = s_power ? (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255 : 0;
     int start = (CONFIG_EXAMPLE_STRIP_LED_NUMBER - lit_count) / 2;
     int end = start + lit_count;
+    for (int i = 0; i < CONFIG_EXAMPLE_STRIP_LED_NUMBER; i++)
+    {
+        ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, 0, 0, 0));
+    }
     for (int i = 0; i < CONFIG_EXAMPLE_STRIP_LED_NUMBER; i++)
     {
         if (i >= start && i < end)
@@ -150,6 +163,13 @@ void light_driver_init(bool power)
         .resolution_hz = 10 * 1000 * 1000, // 10MHz
     };
     ESP_ERROR_CHECK(led_strip_new_rmt_device(&led_strip_conf, &rmt_conf, &s_led_strip));
+
+    esp_timer_create_args_t timer_args = {
+        .callback = light_driver_refresh_cb,
+        .name = "led_refresh",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_refresh_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(s_refresh_timer, 3000000));
 
     s_power = power;
     light_driver_apply();

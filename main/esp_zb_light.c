@@ -44,6 +44,7 @@ static esp_timer_handle_t s_button_long_timer;
 static esp_timer_handle_t s_button_dim_timer;
 static bool s_button_long_active = false;
 static int8_t s_button_dim_direction = 1;
+static volatile int64_t s_button_last_isr_us = 0;
 
 typedef enum
 {
@@ -162,6 +163,12 @@ static void button_dim_timer_cb(void *arg)
 static void IRAM_ATTR button_isr_handler(void *arg)
 {
     (void)arg;
+    int64_t now_us = esp_timer_get_time();
+    if (now_us - s_button_last_isr_us < (int64_t)BUTTON_DEBOUNCE_MS * 1000)
+    {
+        return;
+    }
+    s_button_last_isr_us = now_us;
     int level = gpio_get_level(BUTTON_INPUT_GPIO);
     button_event_t event = (level == BUTTON_ACTIVE_LEVEL) ? BUTTON_EVENT_PRESS : BUTTON_EVENT_RELEASE;
     BaseType_t higher_wakeup = pdFALSE;
