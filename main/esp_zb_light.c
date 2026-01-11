@@ -16,6 +16,9 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "nvs.h"
+#include "esp_timer.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ha/esp_zigbee_ha_standard.h"
@@ -32,9 +35,246 @@ static uint16_t s_color_temp_min = 153;  // ~6500K
 static uint16_t s_color_temp_max = 454;  // ~2200K
 static uint16_t s_color_temp_couple_level_min = 153; // keep CT in range when coupled to level
 static uint16_t s_startup_color_temp = 0xffff; // use previous
+static bool s_persist_power = false;
+static uint8_t s_persist_level = 255;
+static uint16_t s_persist_ct = ESP_ZB_ZCL_COLOR_CONTROL_COLOR_TEMPERATURE_DEF_VALUE;
+static esp_timer_handle_t s_persist_timer;
+static QueueHandle_t s_button_queue;
+static esp_timer_handle_t s_button_long_timer;
+static esp_timer_handle_t s_button_dim_timer;
+static bool s_button_long_active = false;
+static int8_t s_button_dim_direction = 1;
+
+typedef enum
+{
+    BUTTON_EVENT_PRESS,
+    BUTTON_EVENT_RELEASE,
+    BUTTON_EVENT_LONG_START,
+    BUTTON_EVENT_DIM_STEP,
+} button_event_t;
+
+static void persist_state_now(void)
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open("light", NVS_READWRITE, &handle);
+    if (err != ESP_OK)
+    {
+        ESP_LOGW(TAG, "NVS open failed: %s", esp_err_to_name(err));
+        return;
+    }
+    if (nvs_set_u8(handle, "power", s_persist_power ? 1 : 0) != ESP_OK ||
+        nvs_set_u8(handle, "level", s_persist_level) != ESP_OK ||
+        nvs_set_u16(handle, "ct", s_persist_ct) != ESP_OK ||
+        nvs_commit(handle) != ESP_OK)
+    {
+        ESP_LOGW(TAG, "NVS write failed");
+    }
+    nvs_close(handle);
+}
+
+static void persist_timer_cb(void *arg)
+{
+    (void)arg;
+    persist_state_now();
+}
+
+static void schedule_persist(void)
+{
+    if (s_persist_timer)
+    {
+        esp_timer_stop(s_persist_timer);
+        esp_timer_start_once(s_persist_timer, 10000000);
+    }
+}
+
+static void load_persisted_state(void)
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open("light", NVS_READONLY, &handle);
+    if (err != ESP_OK)
+    {
+        return;
+    }
+    uint8_t power = 0;
+    uint8_t level = 0;
+    uint16_t ct = 0;
+    if (nvs_get_u8(handle, "power", &power) == ESP_OK)
+    {
+        s_persist_power = power ? true : false;
+    }
+    if (nvs_get_u8(handle, "level", &level) == ESP_OK)
+    {
+        s_persist_level = level;
+    }
+    if (nvs_get_u16(handle, "ct", &ct) == ESP_OK)
+    {
+        s_persist_ct = ct;
+    }
+    nvs_close(handle);
+}
+
+static void zigbee_set_onoff(bool on)
+{
+    if (esp_zb_lock_acquire(pdMS_TO_TICKS(100)))
+    {
+        esp_zb_zcl_set_attribute_val(HA_COLOR_TEMPERATURE_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_ON_OFF,
+                                     ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, &on, false);
+        esp_zb_lock_release();
+    }
+    light_driver_set_power(on);
+    s_persist_power = on;
+    schedule_persist();
+}
+
+static void zigbee_set_level(uint8_t level)
+{
+    if (esp_zb_lock_acquire(pdMS_TO_TICKS(100)))
+    {
+        esp_zb_zcl_set_attribute_val(HA_COLOR_TEMPERATURE_LIGHT_ENDPOINT, ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL,
+                                     ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID, &level, false);
+        esp_zb_lock_release();
+    }
+    light_driver_set_level(level);
+    s_persist_level = level;
+    schedule_persist();
+}
+
+static void button_long_timer_cb(void *arg)
+{
+    (void)arg;
+    button_event_t event = BUTTON_EVENT_LONG_START;
+    if (s_button_queue)
+    {
+        xQueueSend(s_button_queue, &event, 0);
+    }
+}
+
+static void button_dim_timer_cb(void *arg)
+{
+    (void)arg;
+    button_event_t event = BUTTON_EVENT_DIM_STEP;
+    if (s_button_queue)
+    {
+        xQueueSend(s_button_queue, &event, 0);
+    }
+}
+
+static void IRAM_ATTR button_isr_handler(void *arg)
+{
+    (void)arg;
+    int level = gpio_get_level(BUTTON_INPUT_GPIO);
+    button_event_t event = (level == BUTTON_ACTIVE_LEVEL) ? BUTTON_EVENT_PRESS : BUTTON_EVENT_RELEASE;
+    BaseType_t higher_wakeup = pdFALSE;
+    if (s_button_queue)
+    {
+        xQueueSendFromISR(s_button_queue, &event, &higher_wakeup);
+    }
+    if (higher_wakeup)
+    {
+        portYIELD_FROM_ISR();
+    }
+}
+
+static void button_task(void *arg)
+{
+    (void)arg;
+    button_event_t event;
+    while (xQueueReceive(s_button_queue, &event, portMAX_DELAY))
+    {
+        switch (event)
+        {
+        case BUTTON_EVENT_PRESS:
+            s_button_long_active = false;
+            esp_timer_stop(s_button_long_timer);
+            esp_timer_start_once(s_button_long_timer, BUTTON_LONG_PRESS_MS * 1000);
+            break;
+        case BUTTON_EVENT_RELEASE:
+            esp_timer_stop(s_button_long_timer);
+            esp_timer_stop(s_button_dim_timer);
+            if (!s_button_long_active)
+            {
+                zigbee_set_onoff(!s_persist_power);
+            }
+            s_button_long_active = false;
+            break;
+        case BUTTON_EVENT_LONG_START:
+            s_button_long_active = true;
+            if (!s_persist_power)
+            {
+                zigbee_set_onoff(true);
+            }
+            esp_timer_start_periodic(s_button_dim_timer, BUTTON_DIM_INTERVAL_MS * 1000);
+            break;
+        case BUTTON_EVENT_DIM_STEP:
+        {
+            if (!s_button_long_active)
+            {
+                break;
+            }
+            int level = s_persist_level + (BUTTON_DIM_STEP * s_button_dim_direction);
+            if (level <= 0)
+            {
+                level = 0;
+                s_button_dim_direction = 1;
+            }
+            else if (level >= 255)
+            {
+                level = 255;
+                s_button_dim_direction = -1;
+            }
+            zigbee_set_level((uint8_t)level);
+            if (level == 0 && s_persist_power)
+            {
+                zigbee_set_onoff(false);
+            }
+            else if (level > 0 && !s_persist_power)
+            {
+                zigbee_set_onoff(true);
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+}
+
+static void button_init(void)
+{
+    s_button_queue = xQueueCreate(8, sizeof(button_event_t));
+    gpio_config_t io_conf = {
+        .pin_bit_mask = 1ULL << BUTTON_INPUT_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = (BUTTON_ACTIVE_LEVEL == 0) ? GPIO_PULLUP_ENABLE : GPIO_PULLUP_DISABLE,
+        .pull_down_en = (BUTTON_ACTIVE_LEVEL != 0) ? GPIO_PULLDOWN_ENABLE : GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_ANYEDGE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    esp_err_t isr_err = gpio_install_isr_service(0);
+    if (isr_err != ESP_OK && isr_err != ESP_ERR_INVALID_STATE)
+    {
+        ESP_ERROR_CHECK(isr_err);
+    }
+    ESP_ERROR_CHECK(gpio_isr_handler_add(BUTTON_INPUT_GPIO, button_isr_handler, NULL));
+
+    esp_timer_create_args_t long_args = {
+        .callback = button_long_timer_cb,
+        .name = "button_long",
+    };
+    esp_timer_create_args_t dim_args = {
+        .callback = button_dim_timer_cb,
+        .name = "button_dim",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&long_args, &s_button_long_timer));
+    ESP_ERROR_CHECK(esp_timer_create(&dim_args, &s_button_dim_timer));
+
+    xTaskCreate(button_task, "button_task", 3072, NULL, 4, NULL);
+}
 static esp_err_t deferred_driver_init(void)
 {
-    light_driver_init(LIGHT_DEFAULT_OFF);
+    light_driver_init(s_persist_power ? LIGHT_DEFAULT_ON : LIGHT_DEFAULT_OFF);
+    light_driver_set_level(s_persist_level);
+    light_driver_set_color_temperature(s_persist_ct);
     return ESP_OK;
 }
 
@@ -154,6 +394,8 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
                 light_state = message->attribute.data.value ? *(bool *)message->attribute.data.value : light_state;
                 ESP_LOGI(TAG, "Light sets to %s", light_state ? "On" : "Off");
                 light_driver_set_power(light_state);
+                s_persist_power = light_state;
+                schedule_persist();
             }
             else
             {
@@ -167,6 +409,8 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
                 light_color_temperature = message->attribute.data.value ? *(uint16_t *)message->attribute.data.value : light_color_temperature;
                 ESP_LOGI(TAG, "Light color temperature changes to 0x%x mireds", light_color_temperature);
                 light_driver_set_color_temperature(light_color_temperature);
+                s_persist_ct = light_color_temperature;
+                schedule_persist();
                 break;
             }
             if (message->attribute.id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16)
@@ -199,6 +443,8 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
                 light_level = message->attribute.data.value ? *(uint8_t *)message->attribute.data.value : light_level;
                 light_driver_set_level((uint8_t)light_level);
                 ESP_LOGI(TAG, "Light level changes to %d", light_level);
+                s_persist_level = light_level;
+                schedule_persist();
             }
             else
             {
@@ -319,6 +565,13 @@ void app_main(void)
         .host_config = ESP_ZB_DEFAULT_HOST_CONFIG(),
     };
     ESP_ERROR_CHECK(nvs_flash_init());
+    load_persisted_state();
+    esp_timer_create_args_t timer_args = {
+        .callback = persist_timer_cb,
+        .name = "light_persist",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_persist_timer));
     ESP_ERROR_CHECK(esp_zb_platform_config(&config));
+    button_init();
     xTaskCreate(esp_zb_task, "Zigbee_main", 4096, NULL, 5, NULL);
 }

@@ -45,3 +45,10 @@
     {                                                           \
         .host_connection_mode = ZB_HOST_CONNECTION_MODE_NONE,   \
     }
+
+/* Button input */
+#define BUTTON_INPUT_GPIO         1
+#define BUTTON_ACTIVE_LEVEL       0
+#define BUTTON_LONG_PRESS_MS      600
+#define BUTTON_DIM_STEP           10
+#define BUTTON_DIM_INTERVAL_MS    200
