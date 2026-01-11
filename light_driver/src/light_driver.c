@@ -24,9 +24,11 @@ static bool s_power = true;
 static void light_driver_apply(void)
 {
     int lit_count = s_power ? (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255 : 0;
+    int start = (CONFIG_EXAMPLE_STRIP_LED_NUMBER - lit_count) / 2;
+    int end = start + lit_count;
     for (int i = 0; i < CONFIG_EXAMPLE_STRIP_LED_NUMBER; i++)
     {
-        if (i < lit_count)
+        if (i >= start && i < end)
         {
             ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, s_red, s_green, s_blue));
         }
