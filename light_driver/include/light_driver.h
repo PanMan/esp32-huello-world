@@ -31,7 +31,7 @@ extern "C" {
 // #define CONFIG_EXAMPLE_STRIP_LED_NUMBER 1
 
   // #define CONFIG_EXAMPLE_STRIP_LED_GPIO   9
-  #define CONFIG_EXAMPLE_STRIP_LED_NUMBER 60
+  #define CONFIG_EXAMPLE_STRIP_LED_NUMBER 144
 
 
 /** Convert Hue,Saturation,V to RGB

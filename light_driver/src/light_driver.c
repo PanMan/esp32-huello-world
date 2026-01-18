@@ -18,10 +18,12 @@
 #include "led_strip.h"
 #include "light_driver.h"
 
+static const char *TAG = "light_driver";
 static led_strip_handle_t s_led_strip;
 static uint8_t s_red = 255, s_green = 255, s_blue = 255, s_level = 255;
 static bool s_power = true;
 static esp_timer_handle_t s_refresh_timer;
+static esp_timer_handle_t s_power_timer;
 static void light_driver_apply(void);
 
 static void light_driver_refresh_cb(void *arg)
@@ -29,6 +31,21 @@ static void light_driver_refresh_cb(void *arg)
     (void)arg;
     // Re-apply the current buffer to mitigate occasional pixel glitches.
     light_driver_apply();
+}
+
+static void light_driver_power_log_cb(void *arg)
+{
+    (void)arg;
+    if (!s_power)
+    {
+        ESP_LOGI(TAG, "Estimated current: 0.0 mA (power off)");
+        return;
+    }
+    int lit_count = (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255;
+    float per_led_ma = 20.0f * ((float)s_red + (float)s_green + (float)s_blue) / 255.0f;
+    float total_ma = (float)lit_count * per_led_ma;
+    ESP_LOGI(TAG, "Estimated current: %.1f mA (lit=%d, level=%u, RGB=%u/%u/%u)",
+             (double)total_ma, lit_count, s_level, s_red, s_green, s_blue);
 }
 
 static void light_driver_apply(void)
@@ -169,6 +186,13 @@ void light_driver_init(bool power)
     };
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_refresh_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(s_refresh_timer, 3000000));
+
+    esp_timer_create_args_t power_args = {
+        .callback = light_driver_power_log_cb,
+        .name = "led_power_log",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&power_args, &s_power_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(s_power_timer, 5000000));
 
     s_power = power;
     light_driver_apply();
