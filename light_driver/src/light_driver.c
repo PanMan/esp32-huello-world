@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "led_strip.h"
 #include "light_driver.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "light_driver";
 static led_strip_handle_t s_led_strip;
@@ -24,6 +25,7 @@ static uint8_t s_red = 255, s_green = 255, s_blue = 255, s_level = 255;
 static bool s_power = true;
 static esp_timer_handle_t s_refresh_timer;
 static esp_timer_handle_t s_power_timer;
+static SemaphoreHandle_t s_led_mutex;
 static void light_driver_apply(void);
 
 static void light_driver_refresh_cb(void *arg)
@@ -50,6 +52,14 @@ static void light_driver_power_log_cb(void *arg)
 
 static void light_driver_apply(void)
 {
+    if (!s_led_mutex)
+    {
+        return;
+    }
+    if (xSemaphoreTake(s_led_mutex, pdMS_TO_TICKS(50)) != pdTRUE)
+    {
+        return;
+    }
     int lit_count = s_power ? (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255 : 0;
     int start = (CONFIG_EXAMPLE_STRIP_LED_NUMBER - lit_count) / 2;
     int end = start + lit_count;
@@ -69,6 +79,7 @@ static void light_driver_apply(void)
         }
     }
     ESP_ERROR_CHECK(led_strip_refresh(s_led_strip));
+    xSemaphoreGive(s_led_mutex);
 }
 
 static uint8_t clamp_u8(float value)
@@ -194,6 +205,11 @@ void light_driver_init(bool power)
     ESP_ERROR_CHECK(esp_timer_create(&power_args, &s_power_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(s_power_timer, 5000000));
 
+    s_led_mutex = xSemaphoreCreateMutex();
+    if (!s_led_mutex)
+    {
+        ESP_LOGE(TAG, "Failed to create LED mutex");
+    }
     s_power = power;
     light_driver_apply();
 }
