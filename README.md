@@ -79,7 +79,7 @@ idf.py -p /dev/cu.usbmodem1101 monitor
 ## Changing Device Type (RGB vs Color Temperature vs Extended Color)
 
 ### Current Configuration
-This project is configured as a **Color Dimmable Light** (`ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID`) which supports:
+The upstream Espressif sample this project started from is a **Color Dimmable Light** (`ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID`) which supports:
 - RGB color control (XY color space)
 - Hue/Saturation
 - Brightness/Level
@@ -122,6 +122,55 @@ It supports:
 - Warm/cold white control (mireds)
 - Dimming (level)
 No RGB color control is exposed to Hue.
+
+## Additional Runtime Features Implemented
+
+The current codebase includes several behaviors not covered above.
+
+### 1. Local Button Control
+
+Button input is enabled on `GPIO1` (`main/esp_zb_light.h`):
+- Short press: toggle on/off
+- Long press (`600ms`): start continuous dimming
+- While held: level steps by `10` every `200ms`
+- Dimming direction auto-reverses at `0` and `255`
+- Debounce: `50ms`
+
+### 2. Persisted Light State (Power / Level / Color Temperature)
+
+The firmware persists state in NVS namespace `light`:
+- `power` (`u8`)
+- `level` (`u8`)
+- `ct` (`u16`)
+
+Persistence is delayed and coalesced (write after `10s` of inactivity) to reduce flash wear.
+On boot, values are restored and applied during deferred driver initialization.
+
+### 3. Center-Based Strip Rendering
+
+The strip is rendered as a centered lit segment:
+- Active LED count = `CONFIG_EXAMPLE_STRIP_LED_NUMBER * level / 255`
+- Lit region grows/shrinks from the middle outward/inward
+
+Current defaults in `light_driver/include/light_driver.h`:
+- `CONFIG_EXAMPLE_STRIP_LED_GPIO = 4`
+- `CONFIG_EXAMPLE_STRIP_LED_NUMBER = 144`
+
+### 4. 1-Second Fade Transitions (On and Off)
+
+The light driver applies 1-second fades using 20 frames:
+- Fade-in on effective visible transition `0 -> >0`
+- Fade-out on effective visible transition `>0 -> 0`
+
+This works with Hue command ordering (for example `level=0`, then `on`, then `level>0`) because trigger logic is based on visible lit-count transition, not only On/Off attribute order.
+
+To prevent brief animation glitches, the periodic refresh callback is suspended while a fade is running.
+
+### 5. Periodic Diagnostics
+
+The driver logs estimated LED current every `5s`:
+- Logs `0.0 mA` when off
+- Logs an estimate based on lit count, level, and RGB components when on
 
 To clean up:
 
