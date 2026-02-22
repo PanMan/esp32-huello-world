@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "led_strip.h"
 #include "light_driver.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 static const char *TAG = "light_driver";
