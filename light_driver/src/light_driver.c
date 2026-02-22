@@ -19,6 +19,7 @@
 #include "light_driver.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "light_driver";
 static led_strip_handle_t s_led_strip;
@@ -28,6 +29,12 @@ static esp_timer_handle_t s_refresh_timer;
 static esp_timer_handle_t s_power_timer;
 static SemaphoreHandle_t s_led_mutex;
 static void light_driver_apply(void);
+static void light_driver_fade_in_from_center(void);
+static void light_driver_fade_out_to_center(void);
+static int light_driver_get_lit_count(void);
+
+#define POWER_ON_FADE_DURATION_MS 1000
+#define POWER_ON_FADE_FRAMES 20
 
 static void light_driver_refresh_cb(void *arg)
 {
@@ -51,6 +58,28 @@ static void light_driver_power_log_cb(void *arg)
              (double)total_ma, lit_count, s_level, s_red, s_green, s_blue);
 }
 
+static void light_driver_render(int lit_count, uint8_t red, uint8_t green, uint8_t blue)
+{
+    int start = (CONFIG_EXAMPLE_STRIP_LED_NUMBER - lit_count) / 2;
+    int end = start + lit_count;
+    for (int i = 0; i < CONFIG_EXAMPLE_STRIP_LED_NUMBER; i++)
+    {
+        if (i >= start && i < end)
+        {
+            ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, red, green, blue));
+        }
+        else
+        {
+            ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, 0, 0, 0));
+        }
+    }
+}
+
+static int light_driver_get_lit_count(void)
+{
+    return s_power ? (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255 : 0;
+}
+
 static void light_driver_apply(void)
 {
     if (!s_led_mutex)
@@ -61,26 +90,88 @@ static void light_driver_apply(void)
     {
         return;
     }
-    int lit_count = s_power ? (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255 : 0;
-    int start = (CONFIG_EXAMPLE_STRIP_LED_NUMBER - lit_count) / 2;
-    int end = start + lit_count;
-    for (int i = 0; i < CONFIG_EXAMPLE_STRIP_LED_NUMBER; i++)
-    {
-        ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, 0, 0, 0));
-    }
-    for (int i = 0; i < CONFIG_EXAMPLE_STRIP_LED_NUMBER; i++)
-    {
-        if (i >= start && i < end)
-        {
-            ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, s_red, s_green, s_blue));
-        }
-        else
-        {
-            ESP_ERROR_CHECK(led_strip_set_pixel(s_led_strip, i, 0, 0, 0));
-        }
-    }
+    int lit_count = light_driver_get_lit_count();
+    light_driver_render(lit_count, s_red, s_green, s_blue);
     ESP_ERROR_CHECK(led_strip_refresh(s_led_strip));
     xSemaphoreGive(s_led_mutex);
+}
+
+static void light_driver_fade_in_from_center(void)
+{
+    if (!s_led_mutex)
+    {
+        return;
+    }
+
+    int target_lit_count = light_driver_get_lit_count();
+    if (target_lit_count <= 0)
+    {
+        light_driver_apply();
+        return;
+    }
+
+    TickType_t frame_delay = pdMS_TO_TICKS(POWER_ON_FADE_DURATION_MS / POWER_ON_FADE_FRAMES);
+    if (frame_delay == 0)
+    {
+        frame_delay = 1;
+    }
+
+    for (int frame = 0; frame <= POWER_ON_FADE_FRAMES; frame++)
+    {
+        if (xSemaphoreTake(s_led_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+        {
+            int lit_count = (target_lit_count * frame) / POWER_ON_FADE_FRAMES;
+            uint8_t red = (uint8_t)(((uint16_t)s_red * frame) / POWER_ON_FADE_FRAMES);
+            uint8_t green = (uint8_t)(((uint16_t)s_green * frame) / POWER_ON_FADE_FRAMES);
+            uint8_t blue = (uint8_t)(((uint16_t)s_blue * frame) / POWER_ON_FADE_FRAMES);
+            light_driver_render(lit_count, red, green, blue);
+            ESP_ERROR_CHECK(led_strip_refresh(s_led_strip));
+            xSemaphoreGive(s_led_mutex);
+        }
+        if (frame < POWER_ON_FADE_FRAMES)
+        {
+            vTaskDelay(frame_delay);
+        }
+    }
+}
+
+static void light_driver_fade_out_to_center(void)
+{
+    if (!s_led_mutex)
+    {
+        return;
+    }
+
+    int start_lit_count = (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255;
+    if (start_lit_count <= 0)
+    {
+        light_driver_apply();
+        return;
+    }
+
+    TickType_t frame_delay = pdMS_TO_TICKS(POWER_ON_FADE_DURATION_MS / POWER_ON_FADE_FRAMES);
+    if (frame_delay == 0)
+    {
+        frame_delay = 1;
+    }
+
+    for (int frame = POWER_ON_FADE_FRAMES; frame >= 0; frame--)
+    {
+        if (xSemaphoreTake(s_led_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+        {
+            int lit_count = (start_lit_count * frame) / POWER_ON_FADE_FRAMES;
+            uint8_t red = (uint8_t)(((uint16_t)s_red * frame) / POWER_ON_FADE_FRAMES);
+            uint8_t green = (uint8_t)(((uint16_t)s_green * frame) / POWER_ON_FADE_FRAMES);
+            uint8_t blue = (uint8_t)(((uint16_t)s_blue * frame) / POWER_ON_FADE_FRAMES);
+            light_driver_render(lit_count, red, green, blue);
+            ESP_ERROR_CHECK(led_strip_refresh(s_led_strip));
+            xSemaphoreGive(s_led_mutex);
+        }
+        if (frame > 0)
+        {
+            vTaskDelay(frame_delay);
+        }
+    }
 }
 
 static uint8_t clamp_u8(float value)
@@ -171,14 +262,40 @@ void light_driver_set_color_RGB(uint8_t red, uint8_t green, uint8_t blue)
 
 void light_driver_set_power(bool power)
 {
+    int previous_lit_count = light_driver_get_lit_count();
     s_power = power;
-    light_driver_apply();
+    int current_lit_count = light_driver_get_lit_count();
+    if (previous_lit_count == 0 && current_lit_count > 0)
+    {
+        light_driver_fade_in_from_center();
+    }
+    else if (previous_lit_count > 0 && current_lit_count == 0)
+    {
+        light_driver_fade_out_to_center();
+    }
+    else
+    {
+        light_driver_apply();
+    }
 }
 
 void light_driver_set_level(uint8_t level)
 {
+    int previous_lit_count = light_driver_get_lit_count();
     s_level = level;
-    light_driver_apply();
+    int current_lit_count = light_driver_get_lit_count();
+    if (previous_lit_count == 0 && current_lit_count > 0)
+    {
+        light_driver_fade_in_from_center();
+    }
+    else if (previous_lit_count > 0 && current_lit_count == 0)
+    {
+        light_driver_fade_out_to_center();
+    }
+    else
+    {
+        light_driver_apply();
+    }
 }
 
 void light_driver_init(bool power)
