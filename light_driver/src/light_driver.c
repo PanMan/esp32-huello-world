@@ -27,18 +27,26 @@ static uint8_t s_red = 255, s_green = 255, s_blue = 255, s_level = 255;
 static bool s_power = true;
 static esp_timer_handle_t s_refresh_timer;
 static esp_timer_handle_t s_power_timer;
+static volatile bool s_fade_active = false;
 static SemaphoreHandle_t s_led_mutex;
 static void light_driver_apply(void);
 static void light_driver_fade_in_from_center(void);
 static void light_driver_fade_out_to_center(void);
 static int light_driver_get_lit_count(void);
+static void light_driver_suspend_refresh(void);
+static void light_driver_resume_refresh(void);
 
 #define POWER_ON_FADE_DURATION_MS 1000
 #define POWER_ON_FADE_FRAMES 20
+#define LIGHT_REFRESH_PERIOD_US 3000000
 
 static void light_driver_refresh_cb(void *arg)
 {
     (void)arg;
+    if (s_fade_active)
+    {
+        return;
+    }
     // Re-apply the current buffer to mitigate occasional pixel glitches.
     light_driver_apply();
 }
@@ -80,6 +88,32 @@ static int light_driver_get_lit_count(void)
     return s_power ? (CONFIG_EXAMPLE_STRIP_LED_NUMBER * s_level) / 255 : 0;
 }
 
+static void light_driver_suspend_refresh(void)
+{
+    if (!s_refresh_timer)
+    {
+        return;
+    }
+    esp_err_t err = esp_timer_stop(s_refresh_timer);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+    {
+        ESP_LOGW(TAG, "Failed to stop refresh timer: %s", esp_err_to_name(err));
+    }
+}
+
+static void light_driver_resume_refresh(void)
+{
+    if (!s_refresh_timer)
+    {
+        return;
+    }
+    esp_err_t err = esp_timer_start_periodic(s_refresh_timer, LIGHT_REFRESH_PERIOD_US);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE)
+    {
+        ESP_LOGW(TAG, "Failed to start refresh timer: %s", esp_err_to_name(err));
+    }
+}
+
 static void light_driver_apply(void)
 {
     if (!s_led_mutex)
@@ -110,6 +144,9 @@ static void light_driver_fade_in_from_center(void)
         return;
     }
 
+    s_fade_active = true;
+    light_driver_suspend_refresh();
+
     TickType_t frame_delay = pdMS_TO_TICKS(POWER_ON_FADE_DURATION_MS / POWER_ON_FADE_FRAMES);
     if (frame_delay == 0)
     {
@@ -133,6 +170,9 @@ static void light_driver_fade_in_from_center(void)
             vTaskDelay(frame_delay);
         }
     }
+
+    light_driver_resume_refresh();
+    s_fade_active = false;
 }
 
 static void light_driver_fade_out_to_center(void)
@@ -148,6 +188,9 @@ static void light_driver_fade_out_to_center(void)
         light_driver_apply();
         return;
     }
+
+    s_fade_active = true;
+    light_driver_suspend_refresh();
 
     TickType_t frame_delay = pdMS_TO_TICKS(POWER_ON_FADE_DURATION_MS / POWER_ON_FADE_FRAMES);
     if (frame_delay == 0)
@@ -172,6 +215,9 @@ static void light_driver_fade_out_to_center(void)
             vTaskDelay(frame_delay);
         }
     }
+
+    light_driver_resume_refresh();
+    s_fade_active = false;
 }
 
 static uint8_t clamp_u8(float value)
@@ -314,7 +360,7 @@ void light_driver_init(bool power)
         .name = "led_refresh",
     };
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_refresh_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(s_refresh_timer, 3000000));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(s_refresh_timer, LIGHT_REFRESH_PERIOD_US));
 
     esp_timer_create_args_t power_args = {
         .callback = light_driver_power_log_cb,
