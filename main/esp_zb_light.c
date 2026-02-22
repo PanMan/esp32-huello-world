@@ -414,7 +414,8 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
                 message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16)
             {
                 light_color_temperature = message->attribute.data.value ? *(uint16_t *)message->attribute.data.value : light_color_temperature;
-                ESP_LOGI(TAG, "Light color temperature changes to 0x%x mireds", light_color_temperature);
+                uint32_t kelvin = (light_color_temperature > 0) ? (1000000U / light_color_temperature) : 0U;
+                ESP_LOGI(TAG, "Light color temperature changes to 0x%x mireds (~%u K)", light_color_temperature, (unsigned)kelvin);
                 light_driver_set_color_temperature(light_color_temperature);
                 s_persist_ct = light_color_temperature;
                 schedule_persist();
